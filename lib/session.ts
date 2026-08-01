@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { ensureUser, getRole } from "./queries";
@@ -6,6 +6,24 @@ import type { Role, Session } from "./types";
 
 const COOKIE_NAME = "seisan_uid";
 const TWO_YEARS = 60 * 60 * 24 * 365 * 2;
+
+/**
+ * Decide whether the session cookie may carry the Secure flag.
+ *
+ * Keying this off NODE_ENV alone breaks any http deployment of a production
+ * build — `next start` is always "production", and Safari/WebKit refuses to
+ * store a Secure cookie over http even on localhost, so every request would
+ * arrive as a brand new anonymous user. Trust the proxy's protocol header when
+ * present (Vercel always sets it), and otherwise assume anything that isn't
+ * loopback is served over TLS.
+ */
+async function isSecureConnection(): Promise<boolean> {
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto")?.split(",")[0].trim();
+  if (proto) return proto === "https";
+  const host = h.get("host") ?? "";
+  return !/^(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(host);
+}
 
 /**
  * Identify the caller by an httpOnly cookie, issuing one on first contact.
@@ -20,7 +38,7 @@ export async function getSession(): Promise<Session> {
     secret = randomBytes(32).toString("base64url");
     store.set(COOKIE_NAME, secret, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: await isSecureConnection(),
       sameSite: "lax",
       path: "/",
       maxAge: TWO_YEARS,

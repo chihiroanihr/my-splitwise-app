@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Member } from "@/lib/types";
 import { yen } from "@/lib/format";
+import { splitEqually } from "@/lib/split";
 
 type Mode = "equal" | "custom";
 
@@ -98,14 +99,9 @@ export default function AddExpenseSheet({
   function distributeEqually() {
     if (!totalValid || participantIds.size === 0) return;
     const ids = Array.from(participantIds);
-    const base = Math.floor(totalNum / ids.length);
-    const remainder = totalNum - base * ids.length;
+    const shares = splitEqually(totalNum, ids.length);
     const next = new Map<string, string>();
-    ids.forEach((id, i) => {
-      // Distribute remainder yen across the first few participants.
-      const v = i < remainder ? base + 1 : base;
-      next.set(id, String(v));
-    });
+    ids.forEach((id, i) => next.set(id, String(shares[i])));
     setCustomAmounts(next);
   }
 
@@ -138,8 +134,8 @@ export default function AddExpenseSheet({
     let splits: { memberId: string; shareAmount: number }[] = [];
     if (mode === "equal") {
       const ids = Array.from(participantIds);
-      const share = totalNum / ids.length;
-      splits = ids.map((id) => ({ memberId: id, shareAmount: share }));
+      const shares = splitEqually(totalNum, ids.length);
+      splits = ids.map((id, i) => ({ memberId: id, shareAmount: shares[i] }));
     } else {
       for (const id of participantIds) {
         const raw = customAmounts.get(id) ?? "";

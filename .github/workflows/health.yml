@@ -1,0 +1,25 @@
+name: Health check
+
+# The app can sit unused for weeks. This catches a production that has quietly
+# stopped working — from a platform change, an expired credential, or a bad
+# deploy — before someone tries to use it on a trip.
+on:
+  schedule:
+    - cron: "0 0 * * 1" # every Monday, 09:00 JST
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Check production
+        run: node scripts/health-check.mjs
+        env:
+          HEALTH_URL: https://my-splitwise-app.vercel.app

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { addExpense } from "@/lib/queries";
 import { authorizeGroup, isDenied } from "@/lib/session";
+import { splitEqually } from "@/lib/split";
 
 export async function POST(
   req: Request,
@@ -29,8 +30,11 @@ export async function POST(
   } else if (Array.isArray(body?.participantIds)) {
     const ids = body.participantIds.filter((x: unknown) => typeof x === "string");
     if (ids.length > 0 && Number.isFinite(amount)) {
-      const share = amount / ids.length;
-      splits = ids.map((id: string) => ({ memberId: id, shareAmount: share }));
+      const shares = splitEqually(amount, ids.length);
+      splits = ids.map((id: string, i: number) => ({
+        memberId: id,
+        shareAmount: shares[i],
+      }));
     }
   }
 
