@@ -15,6 +15,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Browsers and their system libraries ship inside this image. Installing
+    # WebKit's dependencies with apt on a bare runner took over 16 minutes and
+    # blew the job timeout; here it costs nothing. Keep the tag in step with the
+    # @playwright/test version in package.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
     env:
       # A separate Neon project — never the production database.
       TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
@@ -41,9 +47,6 @@ jobs:
 
       - name: API tests
         run: npm run test:api
-
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps webkit
 
       - name: End-to-end tests
         run: npm run test:e2e
