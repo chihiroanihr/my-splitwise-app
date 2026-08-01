@@ -1,7 +1,18 @@
+export type Role = "owner" | "member";
+
 export type Group = {
   id: string;
   name: string;
   createdAt: number;
+  /** Only ever sent to users who already have access to the group. */
+  inviteToken?: string;
+  /** The requesting user's role in this group. */
+  role?: Role;
+};
+
+export type Session = {
+  userId: string;
+  isAdmin: boolean;
 };
 
 export type Member = {
@@ -35,6 +46,9 @@ export type GroupState = {
   members: Member[];
   expenses: Expense[];
   revision: number;
+  /** The requesting user's role, plus whether they hold the admin flag. */
+  role: Role;
+  isAdmin: boolean;
 };
 
 export type Balance = {

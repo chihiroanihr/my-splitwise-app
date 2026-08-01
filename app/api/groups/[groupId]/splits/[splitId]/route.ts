@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 import { setSplitStatus } from "@/lib/queries";
+import { authorizeGroup, isDenied } from "@/lib/session";
 
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ groupId: string; splitId: string }> }
 ) {
   const { groupId, splitId } = await params;
+  const auth = await authorizeGroup(groupId);
+  if (isDenied(auth)) return auth;
+
   const body = await req.json().catch(() => null);
   const status = body?.status;
   if (status !== "paid" && status !== "unpaid") {

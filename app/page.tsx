@@ -4,11 +4,12 @@ import Link from "next/link";
 import useSWR from "swr";
 import { useRef, useState } from "react";
 import type { Group } from "@/lib/types";
+import ConfirmDialog from "./components/ConfirmDialog";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function HomePage() {
-  const { data, mutate, isLoading } = useSWR<{ groups: Group[] }>(
+  const { data, mutate, isLoading } = useSWR<{ groups: Group[]; isAdmin: boolean }>(
     "/api/groups",
     fetcher,
     { refreshInterval: 5000 }
@@ -17,6 +18,7 @@ export default function HomePage() {
   const [submitting, setSubmitting] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<Group | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   async function createGroup(e: React.FormEvent) {
@@ -58,9 +60,11 @@ export default function HomePage() {
     setRenameValue("");
   }
 
-  async function deleteGroup(groupId: string, name: string) {
-    if (!confirm(`「${name}」を削除しますか？\nグループ内のすべての支払いデータも削除されます。`)) return;
-    await fetch(`/api/groups/${groupId}`, { method: "DELETE" });
+  async function confirmDelete() {
+    const g = pendingDelete;
+    if (!g) return;
+    setPendingDelete(null);
+    await fetch(`/api/groups/${g.id}`, { method: "DELETE" });
     mutate();
   }
 
@@ -68,9 +72,16 @@ export default function HomePage() {
 
   return (
     <div className="mx-auto max-w-xl px-4 py-6">
-      <header className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">精算アプリ</h1>
-        <p className="mt-1 text-sm text-slate-500">グループを作って、友達と割り勘しよう</p>
+      <header className="mb-6 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">精算アプリ</h1>
+          <p className="mt-1 text-sm text-slate-500">グループを作って、友達と割り勘しよう</p>
+        </div>
+        {data?.isAdmin && (
+          <span className="mt-1 shrink-0 rounded-full bg-slate-900 px-2.5 py-1 text-[10px] font-bold text-white">
+            ADMIN
+          </span>
+        )}
       </header>
 
       <section className="mb-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
@@ -95,17 +106,22 @@ export default function HomePage() {
       </section>
 
       <section>
-        <h2 className="mb-2 px-1 text-sm font-semibold text-slate-700">グループ一覧</h2>
+        <h2 className="mb-2 px-1 text-sm font-semibold text-slate-700">
+          {data?.isAdmin ? "すべてのグループ" : "参加中のグループ"}
+        </h2>
         {isLoading ? (
           <p className="px-1 text-sm text-slate-400">読み込み中…</p>
         ) : groups.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
-            まだグループがありません。上で作成してね
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm leading-relaxed text-slate-500">
+            まだグループがありません。
+            <br />
+            上で作成するか、招待リンクから参加してね
           </div>
         ) : (
           <ul className="space-y-2">
             {groups.map((g) => {
               const isRenaming = renamingId === g.id;
+              const canManage = g.role === "owner" || data?.isAdmin;
               return (
                 <li
                   key={g.id}
@@ -129,7 +145,16 @@ export default function HomePage() {
                       />
                     ) : (
                       <Link href={`/g/${g.id}`} className="block transition active:scale-[0.99]">
-                        <div className="truncate text-base font-semibold text-slate-900">{g.name}</div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate text-base font-semibold text-slate-900">
+                            {g.name}
+                          </span>
+                          {g.role === "owner" && (
+                            <span className="shrink-0 rounded-full bg-brand-50 px-1.5 py-0.5 text-[9px] font-bold text-brand-600">
+                              作成者
+                            </span>
+                          )}
+                        </div>
                         <div className="mt-0.5 text-xs text-slate-400">
                           作成日: {new Date(g.createdAt).toLocaleDateString("ja-JP")}
                         </div>
@@ -147,20 +172,24 @@ export default function HomePage() {
                     </button>
                   ) : (
                     <div className="flex shrink-0 items-center gap-1">
-                      <button
-                        onClick={() => startRename(g)}
-                        className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-brand-600 active:scale-95"
-                        aria-label="名前を変更"
-                      >
-                        ✏️
-                      </button>
-                      <button
-                        onClick={() => deleteGroup(g.id, g.name)}
-                        className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-red-500 active:scale-95"
-                        aria-label="削除"
-                      >
-                        🗑
-                      </button>
+                      {canManage && (
+                        <>
+                          <button
+                            onClick={() => startRename(g)}
+                            className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-brand-600 active:scale-95"
+                            aria-label="名前を変更"
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            onClick={() => setPendingDelete(g)}
+                            className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-red-500 active:scale-95"
+                            aria-label="削除"
+                          >
+                            🗑
+                          </button>
+                        </>
+                      )}
                       <Link href={`/g/${g.id}`} className="pl-1 text-slate-300 text-lg leading-none">
                         ›
                       </Link>
@@ -173,9 +202,24 @@ export default function HomePage() {
         )}
       </section>
 
-      <p className="mt-8 px-1 text-xs text-slate-400">
-        グループのURLを共有すれば、誰でも見て編集できます
+      <p className="mt-8 px-1 text-xs leading-relaxed text-slate-400">
+        グループの招待リンクを送ると、その人だけが参加できます。
+        <br />
+        リンクを持っていない人には内容が一切見えません。
       </p>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={`「${pendingDelete?.name ?? ""}」を削除しますか？`}
+        description="この操作は取り消せません。"
+        warnings={[
+          "グループ内のすべての支払い・メンバーが削除されます",
+          "参加している全員がアクセスできなくなります",
+        ]}
+        confirmLabel="削除する"
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

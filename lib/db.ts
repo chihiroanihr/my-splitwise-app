@@ -40,9 +40,33 @@ async function createSchema(): Promise<void> {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         created_at BIGINT NOT NULL,
-        revision INTEGER NOT NULL DEFAULT 0
+        revision INTEGER NOT NULL DEFAULT 0,
+        invite_token TEXT
       )
     `,
+    // Older rows predate invite_token; give them one so every group is shareable.
+    sql`ALTER TABLE groups ADD COLUMN IF NOT EXISTS invite_token TEXT`,
+    sql`UPDATE groups SET invite_token = md5(random()::text || id) WHERE invite_token IS NULL`,
+    // Anonymous per-device identity. `id` is the SHA-256 of the value held in the
+    // user's cookie, so a database leak alone can't be replayed as a session.
+    sql`
+      CREATE TABLE IF NOT EXISTS app_users (
+        id TEXT PRIMARY KEY,
+        created_at BIGINT NOT NULL,
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE
+      )
+    `,
+    // Who may open which group, and with what authority.
+    sql`
+      CREATE TABLE IF NOT EXISTS group_access (
+        group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'member')),
+        joined_at BIGINT NOT NULL,
+        PRIMARY KEY (group_id, user_id)
+      )
+    `,
+    sql`CREATE INDEX IF NOT EXISTS idx_access_user ON group_access(user_id)`,
     sql`
       CREATE TABLE IF NOT EXISTS members (
         id TEXT PRIMARY KEY,

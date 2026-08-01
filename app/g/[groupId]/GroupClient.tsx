@@ -2,26 +2,64 @@
 
 import Link from "next/link";
 import useSWR from "swr";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { GroupState, Balance, Transfer } from "@/lib/types";
 import { yen } from "@/lib/format";
 import AddExpenseSheet from "./AddExpenseSheet";
+import ConfirmDialog from "../../components/ConfirmDialog";
+import ShareSheet from "../../components/ShareSheet";
 
 type GroupResponse = GroupState & {
   balances: Balance[];
   transfers: Transfer[];
-  error?: string;
 };
+
+type FetchError = Error & { status?: number };
 
 const fetcher = async (url: string) => {
   const r = await fetch(url);
-  if (!r.ok) throw new Error("not found");
+  if (!r.ok) {
+    const err = new Error("request failed") as FetchError;
+    err.status = r.status;
+    throw err;
+  }
   return r.json();
 };
 
+/** Which destructive action is awaiting confirmation. */
+type Pending =
+  | { kind: "member"; memberId: string; name: string }
+  | { kind: "expense"; expenseId: string; description: string }
+  | null;
+
 export default function GroupClient({ groupId }: { groupId: string }) {
+  // An invite link lands here as ?join=<token>. Redeem it before the first
+  // fetch, otherwise the API would (correctly) answer 403.
+  const [joinState, setJoinState] = useState<"checking" | "joining" | "ready">("checking");
+  const [joinFailed, setJoinFailed] = useState(false);
+
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("join");
+    if (!token) {
+      setJoinState("ready");
+      return;
+    }
+    setJoinState("joining");
+    (async () => {
+      const res = await fetch(`/api/groups/${groupId}/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (!res.ok) setJoinFailed(true);
+      // Drop the token from the address bar so it isn't re-shared by accident.
+      window.history.replaceState(null, "", `/g/${groupId}`);
+      setJoinState("ready");
+    })();
+  }, [groupId]);
+
   const { data, mutate, isLoading, error } = useSWR<GroupResponse>(
-    `/api/groups/${groupId}`,
+    joinState === "ready" ? `/api/groups/${groupId}` : null,
     fetcher,
     { refreshInterval: 3000, revalidateOnFocus: true }
   );
@@ -31,7 +69,8 @@ export default function GroupClient({ groupId }: { groupId: string }) {
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
   const [tab, setTab] = useState<"expenses" | "settlement">("expenses");
-  const [copied, setCopied] = useState(false);
+  const [showShare, setShowShare] = useState(false);
+  const [pending, setPending] = useState<Pending>(null);
 
   const memberById = useMemo(() => {
     const m = new Map<string, string>();
@@ -39,17 +78,24 @@ export default function GroupClient({ groupId }: { groupId: string }) {
     return m;
   }, [data]);
 
-  if (error) {
-    return (
-      <div className="mx-auto max-w-xl px-4 py-10 text-center">
-        <p className="text-slate-500">グループが見つかりません</p>
-        <Link href="/" className="mt-4 inline-block text-brand-600 underline">
-          ホームに戻る
-        </Link>
-      </div>
-    );
-  }
-  if (isLoading || !data) {
+  // What actually disappears if the pending member is deleted. Expenses cascade
+  // on the payer, so removing someone can erase other people's debts too.
+  const memberImpact = useMemo(() => {
+    if (pending?.kind !== "member" || !data) return null;
+    const id = pending.memberId;
+    const paidExpenses = data.expenses.filter((e) => e.payerId === id);
+    const paidTotal = paidExpenses.reduce((s, e) => s + e.amount, 0);
+    const ownUnpaid = data.expenses
+      .flatMap((e) => e.splits)
+      .filter((s) => s.memberId === id && s.status === "unpaid")
+      .reduce((s, x) => s + x.shareAmount, 0);
+    const othersOwed = paidExpenses
+      .flatMap((e) => e.splits.filter((s) => s.memberId !== id && s.status === "unpaid"))
+      .reduce((s, x) => s + x.shareAmount, 0);
+    return { count: paidExpenses.length, paidTotal, ownUnpaid, othersOwed };
+  }, [pending, data]);
+
+  if (joinState !== "ready" || (isLoading && !error)) {
     return (
       <div className="mx-auto max-w-xl px-4 py-10 text-center text-slate-400">
         読み込み中…
@@ -57,7 +103,35 @@ export default function GroupClient({ groupId }: { groupId: string }) {
     );
   }
 
-  const { group, members, expenses, balances, transfers } = data;
+  if (error) {
+    const forbidden = (error as FetchError).status === 403;
+    return (
+      <div className="mx-auto max-w-xl px-4 py-10 text-center">
+        <p className="text-4xl" aria-hidden>{forbidden ? "🔒" : "🤔"}</p>
+        <p className="mt-3 font-semibold text-slate-700">
+          {forbidden ? "このグループへのアクセス権がありません" : "グループが見つかりません"}
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-slate-500">
+          {joinFailed
+            ? "招待リンクが正しくないか、期限切れの可能性があります。"
+            : forbidden
+            ? "参加するには、グループのメンバーから招待リンクを送ってもらってください。"
+            : "URLをもう一度確認してください。"}
+        </p>
+        <Link href="/" className="mt-5 inline-block text-brand-600 underline">
+          ホームに戻る
+        </Link>
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const { group, members, expenses, balances, transfers, role, isAdmin } = data;
+  const inviteUrl =
+    typeof window !== "undefined" && group.inviteToken
+      ? `${window.location.origin}/g/${group.id}?join=${group.inviteToken}`
+      : "";
 
   async function addMember(e: React.FormEvent) {
     e.preventDefault();
@@ -77,9 +151,15 @@ export default function GroupClient({ groupId }: { groupId: string }) {
     }
   }
 
-  async function removeMember(memberId: string) {
-    if (!confirm("このメンバーを削除しますか？関連する支払いも削除されます。")) return;
-    await fetch(`/api/groups/${groupId}/members/${memberId}`, { method: "DELETE" });
+  async function runPending() {
+    const p = pending;
+    if (!p) return;
+    setPending(null);
+    if (p.kind === "member") {
+      await fetch(`/api/groups/${groupId}/members/${p.memberId}`, { method: "DELETE" });
+    } else {
+      await fetch(`/api/groups/${groupId}/expenses/${p.expenseId}`, { method: "DELETE" });
+    }
     mutate();
   }
 
@@ -109,27 +189,6 @@ export default function GroupClient({ groupId }: { groupId: string }) {
     mutate();
   }
 
-  async function deleteExpense(expenseId: string) {
-    if (!confirm("この支払いを削除しますか？")) return;
-    await fetch(`/api/groups/${groupId}/expenses/${expenseId}`, { method: "DELETE" });
-    mutate();
-  }
-
-  async function shareGroup() {
-    const url = window.location.href;
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: `精算: ${group.name}`, url });
-        return;
-      } catch {
-        // fall through to copy
-      }
-    }
-    await navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
-
   return (
     <div className="mx-auto max-w-xl px-4 pb-32 pt-5">
       <header className="mb-5 flex items-center justify-between gap-2">
@@ -137,14 +196,25 @@ export default function GroupClient({ groupId }: { groupId: string }) {
           ‹ 戻る
         </Link>
         <button
-          onClick={shareGroup}
+          onClick={() => setShowShare(true)}
           className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-brand-700 shadow-sm ring-1 ring-slate-200 active:scale-95"
         >
-          {copied ? "URLコピー済み ✓" : "共有"}
+          招待リンク
         </button>
       </header>
 
-      <h1 className="mb-1 text-2xl font-bold tracking-tight">{group.name}</h1>
+      <div className="mb-1 flex items-center gap-2">
+        <h1 className="text-2xl font-bold tracking-tight">{group.name}</h1>
+        {isAdmin ? (
+          <span className="shrink-0 rounded-full bg-slate-900 px-2 py-0.5 text-[9px] font-bold text-white">
+            ADMIN
+          </span>
+        ) : role === "owner" ? (
+          <span className="shrink-0 rounded-full bg-brand-50 px-2 py-0.5 text-[9px] font-bold text-brand-600">
+            作成者
+          </span>
+        ) : null}
+      </div>
       <p className="mb-5 text-xs text-slate-400">
         メンバー {members.length}人 · 支払い {expenses.length}件
       </p>
@@ -160,7 +230,7 @@ export default function GroupClient({ groupId }: { groupId: string }) {
               >
                 {m.name}
                 <button
-                  onClick={() => removeMember(m.id)}
+                  onClick={() => setPending({ kind: "member", memberId: m.id, name: m.name })}
                   className="flex h-5 w-5 items-center justify-center rounded-full bg-brand-100 text-xs text-brand-600 hover:bg-brand-200"
                   aria-label={`${m.name}を削除`}
                 >
@@ -213,7 +283,9 @@ export default function GroupClient({ groupId }: { groupId: string }) {
           expenses={expenses}
           memberById={memberById}
           onToggle={toggleSplit}
-          onDelete={deleteExpense}
+          onDelete={(id, description) =>
+            setPending({ kind: "expense", expenseId: id, description })
+          }
           onEdit={(id) => setEditingExpenseId(id)}
         />
       ) : (
@@ -265,8 +337,58 @@ export default function GroupClient({ groupId }: { groupId: string }) {
           />
         );
       })()}
+
+      {showShare && (
+        <ShareSheet
+          url={inviteUrl}
+          groupName={group.name}
+          onClose={() => setShowShare(false)}
+        />
+      )}
+
+      <ConfirmDialog
+        open={pending !== null}
+        title={
+          pending?.kind === "member"
+            ? `「${pending.name}」を削除しますか？`
+            : `「${pending?.description ?? ""}」を削除しますか？`
+        }
+        description="この操作は取り消せません。"
+        warnings={
+          pending?.kind === "member"
+            ? buildMemberWarnings(memberImpact)
+            : ["この支払いの精算記録がすべて削除されます"]
+        }
+        confirmLabel="削除する"
+        onConfirm={runPending}
+        onCancel={() => setPending(null)}
+      />
     </div>
   );
+}
+
+function buildMemberWarnings(
+  impact: { count: number; paidTotal: number; ownUnpaid: number; othersOwed: number } | null
+): string[] {
+  if (!impact) return ["このメンバーが関わる精算記録が削除されます"];
+  const out: string[] = [];
+  if (impact.count > 0) {
+    out.push(
+      `この人が立て替えた支払い ${impact.count} 件（合計 ${yen(impact.paidTotal)}）が丸ごと削除されます`
+    );
+  }
+  if (impact.othersOwed > 0) {
+    out.push(
+      `他のメンバーがこの人に返すはずだった ${yen(impact.othersOwed)} の記録も消えます`
+    );
+  }
+  if (impact.ownUnpaid > 0) {
+    out.push(`この人の未精算 ${yen(impact.ownUnpaid)} の記録が消えます`);
+  }
+  if (out.length === 0) {
+    out.push("このメンバーはどの支払いにも関わっていないため、影響はありません");
+  }
+  return out;
 }
 
 function ExpensesTab({
@@ -279,7 +401,7 @@ function ExpensesTab({
   expenses: GroupState["expenses"];
   memberById: Map<string, string>;
   onToggle: (splitId: string, current: "paid" | "unpaid") => void;
-  onDelete: (expenseId: string) => void;
+  onDelete: (expenseId: string, description: string) => void;
   onEdit: (expenseId: string) => void;
 }) {
   if (expenses.length === 0) {
@@ -408,7 +530,7 @@ function ExpensesTab({
                   <span>編集</span>
                 </button>
                 <button
-                  onClick={() => onDelete(exp.id)}
+                  onClick={() => onDelete(exp.id, exp.description)}
                   className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-500 shadow-sm transition active:scale-95 hover:bg-slate-50 hover:text-red-600"
                 >
                   <span aria-hidden>🗑</span>

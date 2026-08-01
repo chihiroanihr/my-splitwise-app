@@ -8,13 +8,21 @@ import type {
   GroupState,
   Balance,
   Transfer,
+  Role,
+  Session,
 } from "./types";
 
 // Postgres BIGINT comes back as a string from the driver (to avoid precision loss),
 // so timestamps need an explicit conversion back to number.
 const num = (v: unknown): number => (typeof v === "number" ? v : Number(v));
 
-type GroupRow = { id: string; name: string; created_at: string; revision: number };
+type GroupRow = {
+  id: string;
+  name: string;
+  created_at: string;
+  revision: number;
+  invite_token: string;
+};
 type MemberRow = { id: string; group_id: string; name: string; created_at: string };
 type ExpenseRow = {
   id: string;
@@ -53,23 +61,96 @@ const toSplit = (r: SplitRow): ExpenseSplit => ({
   paidAt: r.paid_at === null ? null : num(r.paid_at),
 });
 
-export async function listGroups(): Promise<Group[]> {
+/**
+ * Look up (or lazily create) the anonymous user behind a cookie.
+ * `userKey` is already a SHA-256 digest of the cookie value.
+ */
+export async function ensureUser(userKey: string): Promise<Session> {
   const sql = await db();
   const rows = (await sql`
-    SELECT * FROM groups ORDER BY created_at DESC
-  `) as GroupRow[];
-  return rows.map(toGroup);
+    INSERT INTO app_users (id, created_at)
+    VALUES (${userKey}, ${Date.now()})
+    ON CONFLICT (id) DO UPDATE SET id = app_users.id
+    RETURNING id, is_admin
+  `) as { id: string; is_admin: boolean }[];
+  return { userId: rows[0].id, isAdmin: rows[0].is_admin };
 }
 
-export async function createGroup(name: string): Promise<Group> {
+/** Grant the admin flag to a user. Guarded by ADMIN_KEY at the route level. */
+export async function grantAdmin(userId: string): Promise<void> {
+  const sql = await db();
+  await sql`UPDATE app_users SET is_admin = TRUE WHERE id = ${userId}`;
+}
+
+/** The user's role in a group, or null when they have no access at all. */
+export async function getRole(groupId: string, userId: string): Promise<Role | null> {
+  const sql = await db();
+  const rows = (await sql`
+    SELECT role FROM group_access WHERE group_id = ${groupId} AND user_id = ${userId}
+  `) as { role: Role }[];
+  return rows[0]?.role ?? null;
+}
+
+/** Only the groups this user belongs to. Admins see everything. */
+export async function listGroupsForUser(session: Session): Promise<Group[]> {
+  const sql = await db();
+  const rows = (await (session.isAdmin
+    ? sql`
+        SELECT g.*, COALESCE(a.role, 'member') AS role
+        FROM groups g
+        LEFT JOIN group_access a ON a.group_id = g.id AND a.user_id = ${session.userId}
+        ORDER BY g.created_at DESC
+      `
+    : sql`
+        SELECT g.*, a.role AS role
+        FROM groups g
+        JOIN group_access a ON a.group_id = g.id
+        WHERE a.user_id = ${session.userId}
+        ORDER BY g.created_at DESC
+      `)) as (GroupRow & { role: Role })[];
+  return rows.map((r) => ({ ...toGroup(r), role: r.role }));
+}
+
+export async function createGroup(name: string, userId: string): Promise<Group> {
   const sql = await db();
   const id = nanoid(10);
+  const inviteToken = nanoid(24);
   const now = Date.now();
+  await sql.transaction([
+    sql`
+      INSERT INTO groups (id, name, created_at, revision, invite_token)
+      VALUES (${id}, ${name}, ${now}, 0, ${inviteToken})
+    `,
+    sql`
+      INSERT INTO group_access (group_id, user_id, role, joined_at)
+      VALUES (${id}, ${userId}, 'owner', ${now})
+    `,
+  ]);
+  return { id, name, createdAt: now, inviteToken, role: "owner" };
+}
+
+/**
+ * Add the user to a group if they present the correct invite token.
+ * Existing members are left untouched (their role is preserved).
+ */
+export async function joinGroup(
+  groupId: string,
+  token: string,
+  userId: string
+): Promise<boolean> {
+  const sql = await db();
+  const rows = (await sql`
+    SELECT invite_token FROM groups WHERE id = ${groupId}
+  `) as { invite_token: string }[];
+  const expected = rows[0]?.invite_token;
+  // Reject unknown groups and groups whose token has not been set.
+  if (!expected || !token || token !== expected) return false;
   await sql`
-    INSERT INTO groups (id, name, created_at, revision)
-    VALUES (${id}, ${name}, ${now}, 0)
+    INSERT INTO group_access (group_id, user_id, role, joined_at)
+    VALUES (${groupId}, ${userId}, 'member', ${Date.now()})
+    ON CONFLICT (group_id, user_id) DO NOTHING
   `;
-  return { id, name, createdAt: now };
+  return true;
 }
 
 export async function renameGroup(groupId: string, name: string): Promise<void> {
@@ -82,7 +163,10 @@ export async function deleteGroup(groupId: string): Promise<void> {
   await sql`DELETE FROM groups WHERE id = ${groupId}`;
 }
 
-export async function getGroupState(groupId: string): Promise<GroupState | null> {
+export async function getGroupState(
+  groupId: string,
+  viewer: { role: Role; isAdmin: boolean }
+): Promise<GroupState | null> {
   const sql = await db();
 
   // One HTTP round trip for all four reads, from a single consistent snapshot.
@@ -118,10 +202,13 @@ export async function getGroupState(groupId: string): Promise<GroupState | null>
   }));
 
   return {
-    group: toGroup(groupRow),
+    // The invite token is a capability: only hand it to someone already inside.
+    group: { ...toGroup(groupRow), inviteToken: groupRow.invite_token, role: viewer.role },
     members: memberRows.map(toMember),
     expenses,
     revision: groupRow.revision,
+    role: viewer.role,
+    isAdmin: viewer.isAdmin,
   };
 }
 

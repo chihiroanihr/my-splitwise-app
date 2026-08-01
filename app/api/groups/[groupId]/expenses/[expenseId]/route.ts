@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 import { deleteExpense, updateExpense } from "@/lib/queries";
+import { authorizeGroup, isDenied } from "@/lib/session";
 
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ groupId: string; expenseId: string }> }
 ) {
   const { groupId, expenseId } = await params;
+  const auth = await authorizeGroup(groupId);
+  if (isDenied(auth)) return auth;
+
   const body = await req.json().catch(() => null);
 
   const description = typeof body?.description === "string" ? body.description.trim() : "";
@@ -40,6 +44,9 @@ export async function DELETE(
   { params }: { params: Promise<{ groupId: string; expenseId: string }> }
 ) {
   const { groupId, expenseId } = await params;
+  const auth = await authorizeGroup(groupId);
+  if (isDenied(auth)) return auth;
+
   await deleteExpense(groupId, expenseId);
   return NextResponse.json({ ok: true });
 }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getGroupState, deleteGroup, renameGroup, computeBalances } from "@/lib/queries";
+import { authorizeGroup, isDenied } from "@/lib/session";
 
 // Always hit the database; never prerender this at build time.
 export const dynamic = "force-dynamic";
@@ -9,7 +10,13 @@ export async function GET(
   { params }: { params: Promise<{ groupId: string }> }
 ) {
   const { groupId } = await params;
-  const state = await getGroupState(groupId);
+  const auth = await authorizeGroup(groupId);
+  if (isDenied(auth)) return auth;
+
+  const state = await getGroupState(groupId, {
+    role: auth.role,
+    isAdmin: auth.session.isAdmin,
+  });
   if (!state) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
@@ -22,6 +29,9 @@ export async function PATCH(
   { params }: { params: Promise<{ groupId: string }> }
 ) {
   const { groupId } = await params;
+  const auth = await authorizeGroup(groupId, { ownerOnly: true });
+  if (isDenied(auth)) return auth;
+
   const body = await req.json().catch(() => null);
   const name = typeof body?.name === "string" ? body.name.trim() : "";
   if (!name) return NextResponse.json({ error: "name is required" }, { status: 400 });
@@ -34,6 +44,9 @@ export async function DELETE(
   { params }: { params: Promise<{ groupId: string }> }
 ) {
   const { groupId } = await params;
+  const auth = await authorizeGroup(groupId, { ownerOnly: true });
+  if (isDenied(auth)) return auth;
+
   await deleteGroup(groupId);
   return NextResponse.json({ ok: true });
 }
