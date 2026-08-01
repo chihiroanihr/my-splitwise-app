@@ -38,3 +38,9 @@ data/
 
 # local machine settings
 .claude/settings.local.json
+
+# agent skill files installed by the Neon integration (local tooling, not app code)
+.agents/
+.claude/skills/
+skills-lock.json
+.env*
