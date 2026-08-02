@@ -12,6 +12,7 @@ type InitialExpense = {
   description: string;
   amount: number;
   payerId: string;
+  revision: number;
   splits: { memberId: string; shareAmount: number }[];
 };
 
@@ -27,12 +28,15 @@ export default function AddExpenseSheet({
   initialExpense,
   onClose,
   onSaved,
+  onConflict,
 }: {
   groupId: string;
   members: Member[];
   initialExpense?: InitialExpense;
   onClose: () => void;
   onSaved: () => void;
+  /** Fired when the save was refused because the expense moved underneath us. */
+  onConflict?: () => void;
 }) {
   const isEdit = !!initialExpense;
 
@@ -168,11 +172,17 @@ export default function AddExpenseSheet({
           amount: totalNum,
           payerId,
           splits,
+          // Lets the server reject the save if somebody edited this expense
+          // while this sheet was open, instead of silently overwriting them.
+          ...(isEdit ? { revision: initialExpense!.revision } : {}),
         }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data?.error ?? "エラーが発生しました");
+        // The sheet is now working from stale data either way, so pull the
+        // latest into the list behind it before the user retries.
+        if (res.status === 409 || res.status === 404) onConflict?.();
         return;
       }
       onSaved();

@@ -35,7 +35,35 @@ export async function PATCH(
     return NextResponse.json({ error: `splits sum (${total}) does not match amount (${amount})` }, { status: 400 });
   }
 
-  await updateExpense({ groupId, expenseId, description, amount, payerId, splits });
+  const expectedRevision = Number.isInteger(body?.revision)
+    ? Number(body.revision)
+    : undefined;
+
+  const result = await updateExpense({
+    groupId,
+    expenseId,
+    description,
+    amount,
+    payerId,
+    splits,
+    expectedRevision,
+  });
+
+  if (!result.ok) {
+    if (result.reason === "missing") {
+      return NextResponse.json(
+        { error: "この支払いは削除されました" },
+        { status: 404 }
+      );
+    }
+    return NextResponse.json(
+      {
+        error: "他の人がこの支払いを更新しました。最新の内容を確認してください",
+        currentRevision: result.currentRevision,
+      },
+      { status: 409 }
+    );
+  }
   return NextResponse.json({ ok: true });
 }
 

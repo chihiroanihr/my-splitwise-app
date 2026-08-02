@@ -330,10 +330,12 @@ export default function GroupClient({ groupId }: { groupId: string }) {
               description: exp.description,
               amount: exp.amount,
               payerId: exp.payerId,
+              revision: exp.revision,
               splits: exp.splits.map((s) => ({ memberId: s.memberId, shareAmount: s.shareAmount })),
             }}
             onClose={() => setEditingExpenseId(null)}
             onSaved={() => { setEditingExpenseId(null); mutate(); }}
+            onConflict={() => mutate()}
           />
         );
       })()}

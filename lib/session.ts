@@ -1,7 +1,7 @@
 import { cookies, headers } from "next/headers";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
-import { ensureUser, getRole } from "./queries";
+import { getUser, getRole } from "./queries";
 import type { Role, Session } from "./types";
 
 const COOKIE_NAME = "seisan_uid";
@@ -46,7 +46,7 @@ export async function getSession(): Promise<Session> {
   }
 
   const key = createHash("sha256").update(secret).digest("hex");
-  return ensureUser(key);
+  return getUser(key);
 }
 
 export type Authorized = { session: Session; role: Role };

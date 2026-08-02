@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client, adminClient, createGroup } from "./client";
+import { countUsers } from "./db";
 
 /**
  * Access control is the security boundary of the app: without it, anyone who
@@ -184,6 +185,61 @@ describe("group access control", () => {
       const res = await admin.get("/api/groups");
       const ids = res.data.groups.map((g: any) => g.id);
       for (const id of created) expect(ids).toContain(id);
+    });
+  });
+
+  describe("anonymous identity rows", () => {
+    // A row per visitor would grow without bound: every crawler that touches an
+    // endpoint arrives without a cookie and would leave one behind.
+    it("are not created just by browsing", async () => {
+      const before = await countUsers();
+
+      const visitor = new Client();
+      await visitor.get("/api/groups");
+      await visitor.get(`/api/groups/${group.id}`);
+      await visitor.get("/api/groups/doesnotexist");
+      await visitor.get("/api/admin");
+
+      expect(await countUsers()).toBe(before);
+    });
+
+    it("are not created by a failed join or a wrong admin key", async () => {
+      const before = await countUsers();
+
+      const visitor = new Client();
+      await visitor.post(`/api/groups/${group.id}/join`, { token: "wrong" });
+      await visitor.post("/api/admin", { key: "wrong" });
+
+      expect(await countUsers()).toBe(before);
+    });
+
+    it("are created when a device makes its first group", async () => {
+      const before = await countUsers();
+      const fresh = new Client();
+      const g = await createGroup(fresh, "初グループ");
+      created.push(g.id);
+      expect(await countUsers()).toBe(before + 1);
+    });
+
+    it("are created when a device redeems an invite", async () => {
+      const g = await createGroup(alice, "招待で作成");
+      created.push(g.id);
+
+      const before = await countUsers();
+      const joiner = new Client();
+      await joiner.post(`/api/groups/${g.id}/join`, { token: g.inviteToken });
+      expect(await countUsers()).toBe(before + 1);
+    });
+
+    it("are reused, not duplicated, on repeat visits", async () => {
+      const fresh = new Client();
+      const g = await createGroup(fresh, "重複しない");
+      created.push(g.id);
+
+      const before = await countUsers();
+      await fresh.get("/api/groups");
+      await createGroup(fresh, "二つ目").then((x) => created.push(x.id));
+      expect(await countUsers()).toBe(before);
     });
   });
 

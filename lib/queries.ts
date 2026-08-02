@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import { db } from "./db";
+import { db, type Sql } from "./db";
 import type {
   Group,
   Member,
@@ -32,6 +32,7 @@ type ExpenseRow = {
   amount: number;
   payer_id: string;
   created_at: string;
+  revision: number;
 };
 type SplitRow = {
   id: string;
@@ -63,24 +64,42 @@ const toSplit = (r: SplitRow): ExpenseSplit => ({
 });
 
 /**
- * Look up (or lazily create) the anonymous user behind a cookie.
- * `userKey` is already a SHA-256 digest of the cookie value.
+ * Resolve the anonymous user behind a cookie *without writing anything*.
+ *
+ * `userKey` is already a SHA-256 digest of the cookie value, and is a valid
+ * identity whether or not a row exists yet. Creating the row here instead would
+ * mean every crawler that touches an endpoint leaves one behind, growing the
+ * table without bound; rows are written only once the device actually joins or
+ * creates something (see `userUpsert`).
  */
-export async function ensureUser(userKey: string): Promise<Session> {
+export async function getUser(userKey: string): Promise<Session> {
   const sql = await db();
   const rows = (await sql`
-    INSERT INTO app_users (id, created_at)
-    VALUES (${userKey}, ${Date.now()})
-    ON CONFLICT (id) DO UPDATE SET id = app_users.id
-    RETURNING id, is_admin
-  `) as { id: string; is_admin: boolean }[];
-  return { userId: rows[0].id, isAdmin: rows[0].is_admin };
+    SELECT is_admin FROM app_users WHERE id = ${userKey}
+  `) as { is_admin: boolean }[];
+  return { userId: userKey, isAdmin: rows[0]?.is_admin ?? false };
 }
 
-/** Grant the admin flag to a user. Guarded by ADMIN_KEY at the route level. */
+/**
+ * Statement that materialises the user row. Include it at the head of any
+ * transaction whose other statements reference app_users, since group_access
+ * carries a foreign key onto it.
+ */
+function userUpsert(sql: Sql, userId: string) {
+  return sql`
+    INSERT INTO app_users (id, created_at) VALUES (${userId}, ${Date.now()})
+    ON CONFLICT (id) DO NOTHING
+  `;
+}
+
+/** Grant the admin flag to a device. Guarded by ADMIN_KEY at the route level. */
 export async function grantAdmin(userId: string): Promise<void> {
   const sql = await db();
-  await sql`UPDATE app_users SET is_admin = TRUE WHERE id = ${userId}`;
+  await sql`
+    INSERT INTO app_users (id, created_at, is_admin)
+    VALUES (${userId}, ${Date.now()}, TRUE)
+    ON CONFLICT (id) DO UPDATE SET is_admin = TRUE
+  `;
 }
 
 /** The user's role in a group, or null when they have no access at all. */
@@ -118,6 +137,7 @@ export async function createGroup(name: string, userId: string): Promise<Group> 
   const inviteToken = nanoid(24);
   const now = Date.now();
   await sql.transaction([
+    userUpsert(sql, userId),
     sql`
       INSERT INTO groups (id, name, created_at, revision, invite_token)
       VALUES (${id}, ${name}, ${now}, 0, ${inviteToken})
@@ -195,11 +215,14 @@ export async function joinGroup(
   const expected = rows[0]?.invite_token;
   // Reject unknown groups and groups whose token has not been set.
   if (!expected || !token || token !== expected) return false;
-  await sql`
-    INSERT INTO group_access (group_id, user_id, role, joined_at)
-    VALUES (${groupId}, ${userId}, 'member', ${Date.now()})
-    ON CONFLICT (group_id, user_id) DO NOTHING
-  `;
+  await sql.transaction([
+    userUpsert(sql, userId),
+    sql`
+      INSERT INTO group_access (group_id, user_id, role, joined_at)
+      VALUES (${groupId}, ${userId}, 'member', ${Date.now()})
+      ON CONFLICT (group_id, user_id) DO NOTHING
+    `,
+  ]);
   return true;
 }
 
@@ -248,6 +271,7 @@ export async function getGroupState(
     amount: r.amount,
     payerId: r.payer_id,
     createdAt: num(r.created_at),
+    revision: r.revision,
     splits: splitsByExpense.get(r.id) ?? [],
   }));
 
@@ -328,9 +352,14 @@ export async function addExpense(args: {
     amount: args.amount,
     payerId: args.payerId,
     createdAt: now,
+    revision: 0,
     splits: created,
   };
 }
+
+export type UpdateExpenseResult =
+  | { ok: true }
+  | { ok: false; reason: "missing" | "conflict"; currentRevision?: number };
 
 export async function updateExpense(args: {
   groupId: string;
@@ -339,7 +368,9 @@ export async function updateExpense(args: {
   amount: number;
   payerId: string;
   splits: { memberId: string; shareAmount: number }[];
-}): Promise<void> {
+  /** Revision the editor was working from; omit to force the write through. */
+  expectedRevision?: number;
+}): Promise<UpdateExpenseResult> {
   const sql = await db();
   const now = Date.now();
 
@@ -347,24 +378,43 @@ export async function updateExpense(args: {
   // over anything already settled. Without this, correcting a typo would wipe
   // every "精算済み" tick in the expense. A member whose share *changed* is
   // reset, because what they owe is no longer the amount they settled.
-  const previous = (await sql`
-    SELECT s.member_id, s.share_amount, s.status, s.paid_at
-    FROM expense_splits s
-    JOIN expenses e ON e.id = s.expense_id
-    WHERE s.expense_id = ${args.expenseId} AND e.group_id = ${args.groupId}
-  `) as {
-    member_id: string;
-    share_amount: number;
-    status: "paid" | "unpaid";
-    paid_at: string | null;
-  }[];
+  const [current, previous] = (await sql.transaction([
+    sql`
+      SELECT revision FROM expenses
+      WHERE id = ${args.expenseId} AND group_id = ${args.groupId}
+    `,
+    sql`
+      SELECT s.member_id, s.share_amount, s.status, s.paid_at
+      FROM expense_splits s
+      JOIN expenses e ON e.id = s.expense_id
+      WHERE s.expense_id = ${args.expenseId} AND e.group_id = ${args.groupId}
+    `,
+  ])) as [
+    { revision: number }[],
+    {
+      member_id: string;
+      share_amount: number;
+      status: "paid" | "unpaid";
+      paid_at: string | null;
+    }[]
+  ];
+
+  const revision = current[0]?.revision;
+  if (revision === undefined) return { ok: false, reason: "missing" };
+  // Somebody else saved between this editor opening the sheet and pressing save.
+  if (args.expectedRevision !== undefined && args.expectedRevision !== revision) {
+    return { ok: false, reason: "conflict", currentRevision: revision };
+  }
+
   const before = new Map(previous.map((r) => [r.member_id, r]));
 
   await sql.transaction([
     sql`
       UPDATE expenses
-      SET description = ${args.description}, amount = ${args.amount}, payer_id = ${args.payerId}
+      SET description = ${args.description}, amount = ${args.amount},
+          payer_id = ${args.payerId}, revision = revision + 1
       WHERE id = ${args.expenseId} AND group_id = ${args.groupId}
+        AND revision = ${revision}
     `,
     sql`DELETE FROM expense_splits WHERE expense_id = ${args.expenseId}`,
     ...args.splits.map((s) => {
@@ -395,6 +445,8 @@ export async function updateExpense(args: {
     }),
     sql`UPDATE groups SET revision = revision + 1 WHERE id = ${args.groupId}`,
   ]);
+
+  return { ok: true };
 }
 
 export async function deleteExpense(groupId: string, expenseId: string): Promise<void> {

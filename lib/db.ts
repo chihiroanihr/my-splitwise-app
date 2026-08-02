@@ -1,6 +1,8 @@
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 
-let _sql: NeonQueryFunction<false, false> | null = null;
+export type Sql = NeonQueryFunction<false, false>;
+
+let _sql: Sql | null = null;
 
 /** Lazily create the Neon client so `next build` doesn't crash when DATABASE_URL is unset. */
 export function getSql(): NeonQueryFunction<false, false> {
@@ -83,9 +85,14 @@ async function createSchema(): Promise<void> {
         description TEXT NOT NULL,
         amount DOUBLE PRECISION NOT NULL,
         payer_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-        created_at BIGINT NOT NULL
+        created_at BIGINT NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 0
       )
     `,
+    // Per-expense version, used to reject an edit written against stale data.
+    // The group-level revision is too coarse: it moves whenever anyone touches
+    // anything, which would flag conflicts that aren't.
+    sql`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0`,
     sql`CREATE INDEX IF NOT EXISTS idx_expenses_group ON expenses(group_id)`,
     sql`
       CREATE TABLE IF NOT EXISTS expense_splits (

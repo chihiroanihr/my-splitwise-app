@@ -351,6 +351,98 @@ describe("expenses, settlement and deletion", () => {
       });
     });
 
+    describe("concurrent edits", () => {
+      // Two people on the same trip can have the sheet open at once. Without a
+      // version check the second save silently discards the first.
+      let expenseId: string;
+      const edit = (body: Record<string, unknown>) =>
+        user.patch(`/api/groups/${groupId}/expenses/${expenseId}`, {
+          description: "ホテル",
+          amount: 9000,
+          payerId: A,
+          splits: [
+            { memberId: A, shareAmount: 3000 },
+            { memberId: B, shareAmount: 3000 },
+            { memberId: C, shareAmount: 3000 },
+          ],
+          ...body,
+        });
+
+      beforeEach(async () => {
+        await user.post(`/api/groups/${groupId}/expenses`, {
+          description: "ホテル",
+          amount: 9000,
+          payerId: A,
+          participantIds: [A, B, C],
+        });
+        expenseId = (await state()).expenses[0].id;
+      });
+
+      it("starts at revision 0 and advances on each save", async () => {
+        expect((await state()).expenses[0].revision).toBe(0);
+        await edit({ revision: 0 });
+        expect((await state()).expenses[0].revision).toBe(1);
+      });
+
+      it("accepts a save made against the current revision", async () => {
+        const res = await edit({ revision: 0, description: "更新後" });
+        expect(res.status).toBe(200);
+        expect((await state()).expenses[0].description).toBe("更新後");
+      });
+
+      it("rejects a save made against a stale revision", async () => {
+        await edit({ revision: 0, description: "先に保存した人" });
+
+        const res = await edit({ revision: 0, description: "後から保存した人" });
+        expect(res.status).toBe(409);
+        expect(res.data.currentRevision).toBe(1);
+      });
+
+      it("leaves the first writer's changes intact after a rejected save", async () => {
+        await edit({ revision: 0, description: "先に保存した人" });
+        await edit({ revision: 0, description: "後から保存した人" });
+
+        expect((await state()).expenses[0].description).toBe("先に保存した人");
+      });
+
+      it("lets the loser retry once they have refreshed", async () => {
+        await edit({ revision: 0, description: "先に保存した人" });
+        const fresh = (await state()).expenses[0].revision;
+
+        const res = await edit({ revision: fresh, description: "やり直し" });
+        expect(res.status).toBe(200);
+        expect((await state()).expenses[0].description).toBe("やり直し");
+      });
+
+      it("reports a deleted expense rather than a conflict", async () => {
+        await user.delete(`/api/groups/${groupId}/expenses/${expenseId}`);
+        const res = await edit({ revision: 0 });
+        expect(res.status).toBe(404);
+      });
+
+      it("still saves when no revision is supplied", async () => {
+        await edit({ revision: 0, description: "一度目" });
+        // Older clients omit the field; those saves must not start failing.
+        const res = await edit({ description: "リビジョンなし" });
+        expect(res.status).toBe(200);
+      });
+
+      it("does not bump the revision for unrelated group activity", async () => {
+        await user.post(`/api/groups/${groupId}/members`, { name: "だいき" });
+        const split = (await state()).expenses[0].splits.find(
+          (x: any) => x.status === "unpaid"
+        );
+        await user.patch(`/api/groups/${groupId}/splits/${split.id}`, {
+          status: "paid",
+        });
+
+        // Marking someone settled is not an edit of the expense itself, so an
+        // open edit sheet must not be invalidated by it.
+        expect((await state()).expenses[0].revision).toBe(0);
+        expect((await edit({ revision: 0 })).status).toBe(200);
+      });
+    });
+
     it("does not leave orphaned splits behind", async () => {
       await user.post(`/api/groups/${groupId}/expenses`, {
         description: "3人",

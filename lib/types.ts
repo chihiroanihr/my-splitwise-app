@@ -38,6 +38,8 @@ export type Expense = {
   amount: number;
   payerId: string;
   createdAt: number;
+  /** Bumped on every edit; sent back on save to detect a concurrent change. */
+  revision: number;
   splits: ExpenseSplit[];
 };
 

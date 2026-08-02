@@ -24,6 +24,7 @@ function expense(
     amount,
     payerId: payer.id,
     createdAt: 0,
+    revision: 0,
     splits: splits.map(([m, share, status]) => ({
       id: uid(),
       expenseId: id,
