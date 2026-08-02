@@ -236,7 +236,7 @@ test.describe("revoking access from the UI", () => {
 });
 
 test.describe("exporting", () => {
-  test("downloads the group's records as csv", async ({ page }) => {
+  test("offers a csv link that serves the group's records", async ({ page }) => {
     await createGroup(page, `記録${Date.now()}`);
     await addMember(page, "あゆみ");
     await addMember(page, "けんた");
@@ -244,11 +244,22 @@ test.describe("exporting", () => {
 
     await page.getByRole("button", { name: "精算", exact: true }).click();
 
-    const [download] = await Promise.all([
-      page.waitForEvent("download"),
-      page.getByRole("link", { name: "CSVでダウンロード" }).click(),
-    ]);
-    expect(download.suggestedFilename()).toMatch(/\.csv$/);
+    const link = page.getByRole("link", { name: "CSVでダウンロード" });
+    await expect(link).toBeVisible();
+    const href = await link.getAttribute("href");
+
+    // Fetching through the page's own session exercises the auth path too.
+    // Waiting on a browser download event instead proved unreliable in CI
+    // without testing anything extra: the file itself is what matters.
+    const res = await page.request.get(href!);
+    expect(res.status()).toBe(200);
+    expect(res.headers()["content-type"]).toContain("text/csv");
+    expect(res.headers()["content-disposition"]).toContain("attachment");
+
+    const body = await res.text();
+    expect(body).toContain("ホテル代");
+    expect(body).toContain("あゆみ");
+    expect(body).toContain("6000");
   });
 
   test("offers no export before anything is recorded", async ({ page }) => {
