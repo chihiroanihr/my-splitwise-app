@@ -12,8 +12,12 @@ export default defineConfig({
   use: {
     baseURL: `http://localhost:${PORT}`,
     trace: "retain-on-failure",
-    // The app is mobile-first; test it at the size people actually use.
-    ...devices["iPhone 13"],
   },
-  projects: [{ name: "mobile-safari", use: { ...devices["iPhone 13"] } }],
+  projects: [
+    // Mobile Safari is what friends actually open the invite link in, and it is
+    // the strictest about cookies and dialogs — the two things that have broken
+    // before. Desktop Chrome covers the wider layout and a different engine.
+    { name: "mobile-safari", use: { ...devices["iPhone 13"] } },
+    { name: "desktop-chrome", use: { ...devices["Desktop Chrome"] } },
+  ],
 });

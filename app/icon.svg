@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="精算アプリ">
+  <rect width="64" height="64" rx="14" fill="#0ea5e9"/>
+  <!-- A receipt with a torn bottom edge, split down the middle. -->
+  <path d="M18 12h28v34l-4.7-3.2L36.6 46l-4.6-3.2L27.4 46l-4.7-3.2L18 46z" fill="#fff"/>
+  <rect x="23.5" y="19" width="17" height="3" rx="1.5" fill="#0ea5e9"/>
+  <rect x="23.5" y="26" width="11" height="3" rx="1.5" fill="#7dd3fc"/>
+  <rect x="23.5" y="33" width="14" height="3" rx="1.5" fill="#7dd3fc"/>
+  <!-- Split marker: two coins meeting. -->
+  <circle cx="44" cy="45" r="11" fill="#0284c7" stroke="#fff" stroke-width="3"/>
+  <path d="M39 45h10M44 40v10" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+</svg>

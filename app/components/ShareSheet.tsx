@@ -127,6 +127,9 @@ export default function ShareSheet({
   }
 
   const canNativeShare = typeof navigator !== "undefined" && !!navigator.share;
+  // The server only sends the token to owners and admins, so an empty url is
+  // the signal that this device may not invite anyone.
+  const canInvite = isOwner && url.length > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
@@ -142,46 +145,56 @@ export default function ShareSheet({
         className="relative max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-t-3xl bg-white p-5 shadow-xl pb-sheet sm:rounded-3xl sm:pb-5"
       >
         <h2 id="share-title" className="text-base font-bold text-slate-900">
-          「{groupName}」に招待
+          {canInvite ? `「${groupName}」に招待` : `「${groupName}」の参加者`}
         </h2>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-          このリンクを開いた人だけがグループに参加できます。
-        </p>
 
-        <div className="mt-4 flex gap-2">
-          <input
-            ref={inputRef}
-            readOnly
-            value={url}
-            onFocus={(e) => e.currentTarget.select()}
-            className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600 outline-none ring-brand-500 focus:ring-2"
-          />
-          <button
-            onClick={handleCopy}
-            className="shrink-0 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-95"
-          >
-            コピー
-          </button>
-        </div>
+        {canInvite ? (
+          <>
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              このリンクを開いた人だけがグループに参加できます。
+            </p>
 
-        <div className="mt-2 min-h-[1.25rem] text-xs">
-          {copy === "copied" && (
-            <span className="font-semibold text-emerald-600">✓ コピーしました</span>
-          )}
-          {copy === "failed" && (
-            <span className="font-semibold text-amber-600">
-              コピーできませんでした。上のリンクを選択して手動でコピーしてください
-            </span>
-          )}
-        </div>
+            <div className="mt-4 flex gap-2">
+              <input
+                ref={inputRef}
+                readOnly
+                value={url}
+                onFocus={(e) => e.currentTarget.select()}
+                className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600 outline-none ring-brand-500 focus:ring-2"
+              />
+              <button
+                onClick={handleCopy}
+                className="shrink-0 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-95"
+              >
+                コピー
+              </button>
+            </div>
 
-        {canNativeShare && (
-          <button
-            onClick={handleNativeShare}
-            className="mt-2 w-full rounded-xl bg-brand-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition active:scale-95"
-          >
-            他のアプリで共有
-          </button>
+            <div className="mt-2 min-h-[1.25rem] text-xs">
+              {copy === "copied" && (
+                <span className="font-semibold text-emerald-600">✓ コピーしました</span>
+              )}
+              {copy === "failed" && (
+                <span className="font-semibold text-amber-600">
+                  コピーできませんでした。上のリンクを選択して手動でコピーしてください
+                </span>
+              )}
+            </div>
+
+            {canNativeShare && (
+              <button
+                onClick={handleNativeShare}
+                className="mt-2 w-full rounded-xl bg-brand-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition active:scale-95"
+              >
+                他のアプリで共有
+              </button>
+            )}
+          </>
+        ) : (
+          <p className="mt-2 rounded-xl bg-slate-50 px-3 py-2.5 text-sm leading-relaxed text-slate-600">
+            招待リンクを発行できるのは作成者だけです。誰かを追加したいときは、
+            作成者にリンクを送ってもらってください。
+          </p>
         )}
 
         {/* Who is currently inside */}
@@ -225,7 +238,7 @@ export default function ShareSheet({
           </p>
         </div>
 
-        {isOwner && (
+        {canInvite && (
           <div className="mt-4 border-t border-slate-100 pt-4">
             <button
               onClick={() => setConfirmRotate(true)}

@@ -104,21 +104,49 @@ export default function GroupClient({ groupId }: { groupId: string }) {
   }
 
   if (error) {
-    const forbidden = (error as FetchError).status === 403;
+    // Anything that isn't a deliberate 403/404 is a server or network problem.
+    // Reporting those as "not found" sends people hunting for a wrong URL when
+    // the URL was fine all along.
+    const status = (error as FetchError).status;
+    const view =
+      status === 403
+        ? {
+            icon: "🔒",
+            title: "このグループへのアクセス権がありません",
+            detail: joinFailed
+              ? "招待リンクが正しくないか、作り直された可能性があります。作成者に新しいリンクをもらってください。"
+              : "参加するには、グループの作成者から招待リンクを送ってもらってください。",
+            retry: false,
+          }
+        : status === 404
+        ? {
+            icon: "🤔",
+            title: "グループが見つかりません",
+            detail: "URLをもう一度確認してください。削除された可能性もあります。",
+            retry: false,
+          }
+        : {
+            icon: "⚠️",
+            title: "接続できませんでした",
+            detail:
+              "通信状況を確認して、もう一度お試しください。しばらく待つと復旧することがあります。",
+            retry: true,
+          };
+
     return (
       <div className="mx-auto max-w-xl px-4 py-10 text-center">
-        <p className="text-4xl" aria-hidden>{forbidden ? "🔒" : "🤔"}</p>
-        <p className="mt-3 font-semibold text-slate-700">
-          {forbidden ? "このグループへのアクセス権がありません" : "グループが見つかりません"}
-        </p>
-        <p className="mt-2 text-sm leading-relaxed text-slate-500">
-          {joinFailed
-            ? "招待リンクが正しくないか、期限切れの可能性があります。"
-            : forbidden
-            ? "参加するには、グループのメンバーから招待リンクを送ってもらってください。"
-            : "URLをもう一度確認してください。"}
-        </p>
-        <Link href="/" className="mt-5 inline-block text-brand-600 underline">
+        <p className="text-4xl" aria-hidden>{view.icon}</p>
+        <p className="mt-3 font-semibold text-slate-700">{view.title}</p>
+        <p className="mt-2 text-sm leading-relaxed text-slate-500">{view.detail}</p>
+        {view.retry && (
+          <button
+            onClick={() => mutate()}
+            className="mt-5 rounded-xl bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-95"
+          >
+            再試行
+          </button>
+        )}
+        <Link href="/" className="mt-5 block text-brand-600 underline">
           ホームに戻る
         </Link>
       </div>
@@ -128,6 +156,9 @@ export default function GroupClient({ groupId }: { groupId: string }) {
   if (!data) return null;
 
   const { group, members, expenses, balances, transfers, role, isAdmin } = data;
+  // The token is only sent to owners and admins, so its presence is what
+  // decides whether this device can bring anyone else in.
+  const canInvite = Boolean(group.inviteToken);
   const inviteUrl =
     typeof window !== "undefined" && group.inviteToken
       ? `${window.location.origin}/g/${group.id}?join=${group.inviteToken}`
@@ -199,7 +230,7 @@ export default function GroupClient({ groupId }: { groupId: string }) {
           onClick={() => setShowShare(true)}
           className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-brand-700 shadow-sm ring-1 ring-slate-200 active:scale-95"
         >
-          招待リンク
+          {canInvite ? "招待リンク" : "参加者"}
         </button>
       </header>
 
@@ -290,9 +321,11 @@ export default function GroupClient({ groupId }: { groupId: string }) {
         />
       ) : (
         <SettlementTab
+          groupId={groupId}
           balances={balances}
           transfers={transfers}
           memberById={memberById}
+          hasExpenses={expenses.length > 0}
         />
       )}
 
@@ -552,13 +585,17 @@ function ExpensesTab({
 }
 
 function SettlementTab({
+  groupId,
   balances,
   transfers,
   memberById,
+  hasExpenses,
 }: {
+  groupId: string;
   balances: Balance[];
   transfers: Transfer[];
   memberById: Map<string, string>;
+  hasExpenses: boolean;
 }) {
   const allSettled = transfers.length === 0;
   return (
@@ -643,6 +680,22 @@ function SettlementTab({
           </>
         )}
       </div>
+
+      {hasExpenses && (
+        <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+          <h3 className="mb-1 text-sm font-semibold text-slate-700">記録の保存</h3>
+          <p className="mb-3 text-[11px] leading-relaxed text-slate-400">
+            旅行が終わったあとも手元に残しておけます。表計算ソフトで開けます。
+          </p>
+          <a
+            href={`/api/groups/${groupId}/export`}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 shadow-sm transition active:scale-95 hover:bg-slate-50 hover:text-brand-600"
+          >
+            <span aria-hidden>⬇</span>
+            <span>CSVでダウンロード</span>
+          </a>
+        </div>
+      )}
     </div>
   );
 }

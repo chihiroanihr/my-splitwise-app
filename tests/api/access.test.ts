@@ -120,6 +120,14 @@ describe("group access control", () => {
       expect(res.status).toBe(201);
     });
 
+    it("is not given the invite token", async () => {
+      // Only the owner may bring new people in, so members never see the token.
+      const res = await bob.get(`/api/groups/${group.id}`);
+      expect(res.status).toBe(200);
+      expect(res.data.group.inviteToken).toBeUndefined();
+      expect(JSON.stringify(res.data)).not.toContain(group.inviteToken);
+    });
+
     it("cannot rename the group", async () => {
       const res = await bob.patch(`/api/groups/${group.id}`, { name: "乗っ取り" });
       expect(res.status).toBe(403);
@@ -174,6 +182,31 @@ describe("group access control", () => {
       const res = await admin.get(`/api/groups/${group.id}`);
       expect(res.status).toBe(200);
       expect(res.data.isAdmin).toBe(true);
+    });
+
+    it("does receive the invite token", async () => {
+      const res = await admin.get(`/api/groups/${group.id}`);
+      expect(res.data.group.inviteToken).toBeTruthy();
+    });
+
+    it("throttles repeated wrong keys", async () => {
+      // Defence in depth behind a ~144-bit key: nobody should get free
+      // unlimited guesses at the endpoint.
+      const attacker = new Client();
+      const codes: number[] = [];
+      for (let i = 0; i < 10; i++) {
+        codes.push((await attacker.post("/api/admin", { key: `guess-${i}` })).status);
+      }
+      // Some attempts answered normally, then throttling takes over.
+      expect(codes).toContain(403);
+      expect(codes).toContain(429);
+    });
+
+    it("still admits the real key after the throttle has tripped", async () => {
+      // The limiter must never lock the owner out of their own admin page.
+      const owner = new Client();
+      const res = await owner.post("/api/admin", { key: process.env.ADMIN_KEY });
+      expect(res.status).toBe(200);
     });
 
     it("can rename any group", async () => {

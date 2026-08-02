@@ -276,8 +276,16 @@ export async function getGroupState(
   }));
 
   return {
-    // The invite token is a capability: only hand it to someone already inside.
-    group: { ...toGroup(groupRow), inviteToken: groupRow.invite_token, role: viewer.role },
+    // The invite token is a capability to let strangers in, so only the owner
+    // (and an admin) ever receives it. Members can see who is in the group but
+    // cannot bring anyone else along.
+    group: {
+      ...toGroup(groupRow),
+      ...(viewer.role === "owner" || viewer.isAdmin
+        ? { inviteToken: groupRow.invite_token }
+        : {}),
+      role: viewer.role,
+    },
     members: memberRows.map(toMember),
     expenses,
     revision: groupRow.revision,

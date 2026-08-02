@@ -197,7 +197,8 @@ test.describe("revoking access from the UI", () => {
 
     const friend = await browser.newPage();
     await friend.goto(inviteUrl);
-    await expect(friend.getByRole("button", { name: "招待リンク" })).toBeVisible();
+    // Members get the "参加者" button; only the owner sees "招待リンク".
+    await expect(friend.getByRole("button", { name: "参加者" })).toBeVisible();
 
     await page.getByRole("button", { name: "招待リンク" }).click();
     const dialog = page.getByRole("dialog");
@@ -212,21 +213,48 @@ test.describe("revoking access from the UI", () => {
     await friend.close();
   });
 
-  test("a member sees no rotate button", async ({ page, browser }) => {
+  test("a member gets no invite link at all", async ({ page, browser }) => {
     await createGroup(page, `権限${Date.now()}`);
     await page.getByRole("button", { name: "招待リンク" }).click();
     const inviteUrl = await page.getByRole("dialog").locator("input[readonly]").inputValue();
 
     const friend = await browser.newPage();
     await friend.goto(inviteUrl);
-    await friend.getByRole("button", { name: "招待リンク" }).click();
-    await expect(friend.getByRole("dialog")).toBeVisible();
+    // The button is labelled for what they can actually do.
+    await friend.getByRole("button", { name: "参加者" }).click();
+
+    const dialog = friend.getByRole("dialog");
+    await expect(dialog).toContainText("招待リンクを発行できるのは作成者だけです");
+    await expect(dialog.locator("input[readonly]")).toHaveCount(0);
     await expect(
       friend.getByRole("button", { name: "招待リンクを作り直す" })
     ).toBeHidden();
     // But they can still leave on their own.
     await expect(friend.getByRole("button", { name: "退出" })).toBeVisible();
     await friend.close();
+  });
+});
+
+test.describe("exporting", () => {
+  test("downloads the group's records as csv", async ({ page }) => {
+    await createGroup(page, `記録${Date.now()}`);
+    await addMember(page, "あゆみ");
+    await addMember(page, "けんた");
+    await addExpense(page, "ホテル代", "12000");
+
+    await page.getByRole("button", { name: "精算", exact: true }).click();
+
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("link", { name: "CSVでダウンロード" }).click(),
+    ]);
+    expect(download.suggestedFilename()).toMatch(/\.csv$/);
+  });
+
+  test("offers no export before anything is recorded", async ({ page }) => {
+    await createGroup(page, `空${Date.now()}`);
+    await page.getByRole("button", { name: "精算", exact: true }).click();
+    await expect(page.getByRole("link", { name: "CSVでダウンロード" })).toBeHidden();
   });
 });
 
@@ -256,7 +284,7 @@ test.describe("access control in the browser", () => {
 
     const friend = await browser.newPage();
     await friend.goto(inviteUrl);
-    await expect(friend.getByRole("button", { name: "招待リンク" })).toBeVisible();
+    await expect(friend.getByRole("button", { name: "参加者" })).toBeVisible();
     // The token is stripped from the address bar after redemption.
     expect(friend.url()).not.toContain("join=");
     await friend.close();

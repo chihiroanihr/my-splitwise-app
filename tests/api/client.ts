@@ -35,6 +35,20 @@ export class Client {
     return { status: res.status, data };
   }
 
+  /**
+   * Raw bytes, for assertions that `text()` would hide — it decodes UTF-8 and
+   * strips a leading byte-order mark, which is exactly the thing the CSV export
+   * needs to emit for Excel.
+   */
+  async getBytes(path: string): Promise<{ status: number; bytes: Uint8Array }> {
+    const res = await fetch(`${BASE_URL}${path}`, {
+      headers: this.cookies.size > 0 ? { cookie: this.cookieHeader() } : {},
+      redirect: "manual",
+    });
+    this.storeCookies(res);
+    return { status: res.status, bytes: new Uint8Array(await res.arrayBuffer()) };
+  }
+
   get = (p: string) => this.request("GET", p);
   post = (p: string, b?: unknown) => this.request("POST", p, b ?? {});
   patch = (p: string, b?: unknown) => this.request("PATCH", p, b ?? {});

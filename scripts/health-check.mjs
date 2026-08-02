@@ -64,8 +64,11 @@ check("admin endpoint refuses an empty key", async () => {
     body: JSON.stringify({ key: "" }),
     signal: AbortSignal.timeout(30_000),
   });
-  if (res.status !== 403) throw new Error(`expected 403, got ${res.status}`);
-  return "403 as expected";
+  // 429 also means refused — repeated runs can trip the failure throttle.
+  if (res.status !== 403 && res.status !== 429) {
+    throw new Error(`expected 403 or 429, got ${res.status}`);
+  }
+  return `${res.status} as expected`;
 });
 
 console.log(`Health check → ${BASE}\n`);

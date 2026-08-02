@@ -12,7 +12,9 @@ export default function AdminPage() {
     fetcher
   );
   const [key, setKey] = useState("");
-  const [status, setStatus] = useState<"idle" | "working" | "failed">("idle");
+  const [status, setStatus] = useState<"idle" | "working" | "failed" | "throttled">(
+    "idle"
+  );
 
   async function claim(e: React.FormEvent) {
     e.preventDefault();
@@ -28,7 +30,7 @@ export default function AdminPage() {
       setStatus("idle");
       mutate();
     } else {
-      setStatus("failed");
+      setStatus(res.status === 429 ? "throttled" : "failed");
     }
   }
 
@@ -77,6 +79,11 @@ export default function AdminPage() {
           {status === "failed" && (
             <p className="mt-2 text-xs font-semibold text-red-600">
               管理キーが違います
+            </p>
+          )}
+          {status === "throttled" && (
+            <p className="mt-2 text-xs font-semibold text-amber-600">
+              試行回数が多すぎます。しばらく待ってからお試しください
             </p>
           )}
           {data && !data.configured && (
