@@ -158,6 +158,78 @@ test.describe("invite sharing", () => {
   });
 });
 
+test.describe("revoking access from the UI", () => {
+  test("lists the devices that can open the group", async ({ page }) => {
+    await createGroup(page, `参加者${Date.now()}`);
+    await page.getByRole("button", { name: "招待リンク" }).click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("アクセスできる端末 (1)");
+    await expect(dialog).toContainText("この端末");
+  });
+
+  test("rotating the invite link kills the old one", async ({ page, browser }) => {
+    await createGroup(page, `再発行${Date.now()}`);
+    await page.getByRole("button", { name: "招待リンク" }).click();
+    const oldUrl = await page.getByRole("dialog").locator("input[readonly]").inputValue();
+
+    await page.getByRole("button", { name: "招待リンクを作り直す" }).click();
+    // `exact` keeps this off the "招待リンクを作り直す" button behind the dialog.
+    await page.getByRole("button", { name: "作り直す", exact: true }).click();
+
+    // The sheet now shows a different link.
+    await expect(async () => {
+      const current = await page.getByRole("dialog").locator("input[readonly]").inputValue();
+      expect(current).not.toBe(oldUrl);
+    }).toPass();
+
+    const stranger = await browser.newPage();
+    await stranger.goto(oldUrl);
+    await expect(stranger.getByText("このグループへのアクセス権がありません")).toBeVisible();
+    await stranger.close();
+  });
+
+  test("the owner can revoke a joined device", async ({ page, browser }) => {
+    await createGroup(page, `解除${Date.now()}`);
+    await page.getByRole("button", { name: "招待リンク" }).click();
+    const inviteUrl = await page.getByRole("dialog").locator("input[readonly]").inputValue();
+    await page.getByRole("button", { name: "閉じる" }).click();
+
+    const friend = await browser.newPage();
+    await friend.goto(inviteUrl);
+    await expect(friend.getByRole("button", { name: "招待リンク" })).toBeVisible();
+
+    await page.getByRole("button", { name: "招待リンク" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("アクセスできる端末 (2)");
+
+    await dialog.getByRole("button", { name: "解除" }).click();
+    await page.getByRole("button", { name: "解除する" }).click();
+    await expect(dialog).toContainText("アクセスできる端末 (1)");
+
+    await friend.reload();
+    await expect(friend.getByText("このグループへのアクセス権がありません")).toBeVisible();
+    await friend.close();
+  });
+
+  test("a member sees no rotate button", async ({ page, browser }) => {
+    await createGroup(page, `権限${Date.now()}`);
+    await page.getByRole("button", { name: "招待リンク" }).click();
+    const inviteUrl = await page.getByRole("dialog").locator("input[readonly]").inputValue();
+
+    const friend = await browser.newPage();
+    await friend.goto(inviteUrl);
+    await friend.getByRole("button", { name: "招待リンク" }).click();
+    await expect(friend.getByRole("dialog")).toBeVisible();
+    await expect(
+      friend.getByRole("button", { name: "招待リンクを作り直す" })
+    ).toBeHidden();
+    // But they can still leave on their own.
+    await expect(friend.getByRole("button", { name: "退出" })).toBeVisible();
+    await friend.close();
+  });
+});
+
 test.describe("access control in the browser", () => {
   test("a group is invisible to someone without an invite", async ({ page, browser }) => {
     await createGroup(page, `非公開${Date.now()}`);

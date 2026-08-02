@@ -3,7 +3,7 @@ import path from "node:path";
 
 export default defineConfig({
   resolve: {
-    alias: { "@": path.resolve(__dirname, ".") },
+    alias: { "@": path.resolve(import.meta.dirname, ".") },
   },
   test: {
     // Unit tests are pure; API tests talk to a server over HTTP. Neither needs

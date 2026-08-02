@@ -14,8 +14,12 @@ import { existsSync } from "node:fs";
 const PORT = Number(process.env.TEST_PORT ?? 3100);
 const BASE = `http://localhost:${PORT}`;
 
-// Local runs get their secrets from .env.local; CI injects them directly.
-if (existsSync(".env.local")) config({ path: ".env.local", quiet: true });
+// Local runs get their secrets from .env files; CI injects them directly.
+// .env.test.local is kept separate because `vercel env pull` rewrites
+// .env.local wholesale and would drop TEST_DATABASE_URL every time.
+for (const file of [".env.local", ".env.test.local"]) {
+  if (existsSync(file)) config({ path: file, quiet: true, override: true });
+}
 
 const testDb = process.env.TEST_DATABASE_URL;
 if (!testDb) {

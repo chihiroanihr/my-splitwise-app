@@ -340,8 +340,12 @@ export default function GroupClient({ groupId }: { groupId: string }) {
 
       {showShare && (
         <ShareSheet
+          groupId={groupId}
           url={inviteUrl}
           groupName={group.name}
+          isOwner={role === "owner" || isAdmin}
+          // A rotated token means the URL on screen is stale — refetch it.
+          onRotated={() => mutate()}
           onClose={() => setShowShare(false)}
         />
       )}

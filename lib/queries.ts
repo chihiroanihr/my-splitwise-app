@@ -10,6 +10,7 @@ import type {
   Transfer,
   Role,
   Session,
+  Participant,
 } from "./types";
 
 // Postgres BIGINT comes back as a string from the driver (to avoid precision loss),
@@ -127,6 +128,55 @@ export async function createGroup(name: string, userId: string): Promise<Group> 
     `,
   ]);
   return { id, name, createdAt: now, inviteToken, role: "owner" };
+}
+
+/**
+ * Issue a fresh invite token, invalidating every link handed out so far.
+ * The only way to shut out someone the link was forwarded to.
+ */
+export async function rotateInviteToken(groupId: string): Promise<string> {
+  const sql = await db();
+  const token = nanoid(24);
+  await sql.transaction([
+    sql`UPDATE groups SET invite_token = ${token} WHERE id = ${groupId}`,
+    sql`UPDATE groups SET revision = revision + 1 WHERE id = ${groupId}`,
+  ]);
+  return token;
+}
+
+/** Everyone who can currently open this group, oldest first. */
+export async function listParticipants(groupId: string): Promise<Participant[]> {
+  const sql = await db();
+  const rows = (await sql`
+    SELECT user_id, role, joined_at
+    FROM group_access
+    WHERE group_id = ${groupId}
+    ORDER BY joined_at ASC
+  `) as { user_id: string; role: Role; joined_at: string }[];
+  return rows.map((r) => ({
+    userId: r.user_id,
+    role: r.role,
+    joinedAt: num(r.joined_at),
+  }));
+}
+
+/**
+ * Revoke a participant's access. Owners cannot be removed — a group without an
+ * owner would have nobody able to delete or rename it.
+ */
+export async function removeParticipant(
+  groupId: string,
+  userId: string
+): Promise<boolean> {
+  const sql = await db();
+  const rows = (await sql`
+    DELETE FROM group_access
+    WHERE group_id = ${groupId} AND user_id = ${userId} AND role <> 'owner'
+    RETURNING user_id
+  `) as { user_id: string }[];
+  if (rows.length === 0) return false;
+  await sql`UPDATE groups SET revision = revision + 1 WHERE id = ${groupId}`;
+  return true;
 }
 
 /**
@@ -293,6 +343,23 @@ export async function updateExpense(args: {
   const sql = await db();
   const now = Date.now();
 
+  // Splits are rebuilt from scratch, so read the current ones first and carry
+  // over anything already settled. Without this, correcting a typo would wipe
+  // every "精算済み" tick in the expense. A member whose share *changed* is
+  // reset, because what they owe is no longer the amount they settled.
+  const previous = (await sql`
+    SELECT s.member_id, s.share_amount, s.status, s.paid_at
+    FROM expense_splits s
+    JOIN expenses e ON e.id = s.expense_id
+    WHERE s.expense_id = ${args.expenseId} AND e.group_id = ${args.groupId}
+  `) as {
+    member_id: string;
+    share_amount: number;
+    status: "paid" | "unpaid";
+    paid_at: string | null;
+  }[];
+  const before = new Map(previous.map((r) => [r.member_id, r]));
+
   await sql.transaction([
     sql`
       UPDATE expenses
@@ -302,11 +369,27 @@ export async function updateExpense(args: {
     sql`DELETE FROM expense_splits WHERE expense_id = ${args.expenseId}`,
     ...args.splits.map((s) => {
       const isPayer = s.memberId === args.payerId;
+      const prior = before.get(s.memberId);
+      const keepPaid =
+        !isPayer &&
+        prior?.status === "paid" &&
+        prior.share_amount === s.shareAmount;
+
+      const status = isPayer || keepPaid ? "paid" : "unpaid";
+      const paidAt = isPayer
+        ? now
+        : keepPaid
+        ? // Keep the original timestamp; fall back if the row somehow lacked one.
+          prior!.paid_at === null
+          ? now
+          : num(prior!.paid_at)
+        : null;
+
       return sql`
         INSERT INTO expense_splits (id, expense_id, member_id, share_amount, status, paid_at)
         VALUES (
           ${nanoid(10)}, ${args.expenseId}, ${s.memberId}, ${s.shareAmount},
-          ${isPayer ? "paid" : "unpaid"}, ${isPayer ? now : null}
+          ${status}, ${paidAt}
         )
       `;
     }),

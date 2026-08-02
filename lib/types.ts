@@ -15,6 +15,15 @@ export type Session = {
   isAdmin: boolean;
 };
 
+/** A device that can open a group — distinct from a Member, who is just a name. */
+export type Participant = {
+  userId: string;
+  role: Role;
+  joinedAt: number;
+  /** Set on the entry belonging to the requesting device. */
+  isYou?: boolean;
+};
+
 export type Member = {
   id: string;
   groupId: string;

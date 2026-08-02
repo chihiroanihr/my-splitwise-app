@@ -219,6 +219,138 @@ describe("expenses, settlement and deletion", () => {
       expect(netOf(after, A)).toBe(8000);
     });
 
+    describe("settled ticks survive an edit", () => {
+      // Rebuilding the splits used to reset every "精算済み" tick, so fixing a
+      // typo forced everyone to re-confirm they had paid.
+      let expenseId: string;
+
+      beforeEach(async () => {
+        await user.post(`/api/groups/${groupId}/expenses`, {
+          description: "ホテル",
+          amount: 9000,
+          payerId: A,
+          participantIds: [A, B, C],
+        });
+        const s = await state();
+        expenseId = s.expenses[0].id;
+        const bSplit = s.expenses[0].splits.find((x: any) => x.memberId === B);
+        await user.patch(`/api/groups/${groupId}/splits/${bSplit.id}`, {
+          status: "paid",
+        });
+      });
+
+      const statusOf = async (memberId: string) => {
+        const s = await state();
+        return s.expenses[0].splits.find((x: any) => x.memberId === memberId).status;
+      };
+
+      it("keeps it when only the description changes", async () => {
+        await user.patch(`/api/groups/${groupId}/expenses/${expenseId}`, {
+          description: "ホテル(名称修正)",
+          amount: 9000,
+          payerId: A,
+          splits: [
+            { memberId: A, shareAmount: 3000 },
+            { memberId: B, shareAmount: 3000 },
+            { memberId: C, shareAmount: 3000 },
+          ],
+        });
+        expect(await statusOf(B)).toBe("paid");
+        expect(await statusOf(C)).toBe("unpaid");
+      });
+
+      it("keeps the original paid timestamp", async () => {
+        const before = await state();
+        const paidAt = before.expenses[0].splits.find(
+          (x: any) => x.memberId === B
+        ).paidAt;
+
+        await user.patch(`/api/groups/${groupId}/expenses/${expenseId}`, {
+          description: "ホテル(修正)",
+          amount: 9000,
+          payerId: A,
+          splits: [
+            { memberId: A, shareAmount: 3000 },
+            { memberId: B, shareAmount: 3000 },
+            { memberId: C, shareAmount: 3000 },
+          ],
+        });
+
+        const after = await state();
+        expect(
+          after.expenses[0].splits.find((x: any) => x.memberId === B).paidAt
+        ).toBe(paidAt);
+      });
+
+      it("keeps it for members whose share is unchanged when someone else's moves", async () => {
+        await user.patch(`/api/groups/${groupId}/expenses/${expenseId}`, {
+          description: "ホテル",
+          amount: 10000,
+          payerId: A,
+          splits: [
+            { memberId: A, shareAmount: 4000 },
+            { memberId: B, shareAmount: 3000 },
+            { memberId: C, shareAmount: 3000 },
+          ],
+        });
+        expect(await statusOf(B)).toBe("paid");
+      });
+
+      it("resets it when that member's own share changes", async () => {
+        await user.patch(`/api/groups/${groupId}/expenses/${expenseId}`, {
+          description: "ホテル",
+          amount: 12000,
+          payerId: A,
+          splits: [
+            { memberId: A, shareAmount: 4000 },
+            { memberId: B, shareAmount: 4000 },
+            { memberId: C, shareAmount: 4000 },
+          ],
+        });
+        // B settled ¥3,000 but now owes ¥4,000, so the tick can't stand.
+        expect(await statusOf(B)).toBe("unpaid");
+      });
+
+      it("does not resurrect a tick after the member is dropped and re-added", async () => {
+        await user.patch(`/api/groups/${groupId}/expenses/${expenseId}`, {
+          description: "ホテル",
+          amount: 6000,
+          payerId: A,
+          splits: [
+            { memberId: A, shareAmount: 3000 },
+            { memberId: C, shareAmount: 3000 },
+          ],
+        });
+        await user.patch(`/api/groups/${groupId}/expenses/${expenseId}`, {
+          description: "ホテル",
+          amount: 9000,
+          payerId: A,
+          splits: [
+            { memberId: A, shareAmount: 3000 },
+            { memberId: B, shareAmount: 3000 },
+            { memberId: C, shareAmount: 3000 },
+          ],
+        });
+        expect(await statusOf(B)).toBe("unpaid");
+      });
+
+      it("keeps other members settled when the payer changes", async () => {
+        await user.patch(`/api/groups/${groupId}/expenses/${expenseId}`, {
+          description: "ホテル",
+          amount: 9000,
+          payerId: C,
+          splits: [
+            { memberId: A, shareAmount: 3000 },
+            { memberId: B, shareAmount: 3000 },
+            { memberId: C, shareAmount: 3000 },
+          ],
+        });
+        expect(await statusOf(B)).toBe("paid");
+        // The new payer is settled by definition.
+        expect(await statusOf(C)).toBe("paid");
+      });
+    });
+
     it("does not leave orphaned splits behind", async () => {
       await user.post(`/api/groups/${groupId}/expenses`, {
         description: "3人",

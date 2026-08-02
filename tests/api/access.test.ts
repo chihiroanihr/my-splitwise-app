@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { Client, adminClient, createGroup, addMember } from "./client";
+import { Client, adminClient, createGroup } from "./client";
 
 /**
  * Access control is the security boundary of the app: without it, anyone who
@@ -184,6 +184,146 @@ describe("group access control", () => {
       const res = await admin.get("/api/groups");
       const ids = res.data.groups.map((g: any) => g.id);
       for (const id of created) expect(ids).toContain(id);
+    });
+  });
+
+  describe("revoking access", () => {
+    it("lists everyone who can open the group", async () => {
+      const g = await createGroup(alice, "参加者一覧");
+      created.push(g.id);
+      await bob.post(`/api/groups/${g.id}/join`, { token: g.inviteToken });
+
+      const res = await alice.get(`/api/groups/${g.id}/participants`);
+      expect(res.status).toBe(200);
+      expect(res.data.participants).toHaveLength(2);
+      expect(res.data.participants.filter((p: any) => p.role === "owner")).toHaveLength(1);
+      expect(res.data.participants.find((p: any) => p.isYou).role).toBe("owner");
+    });
+
+    it("hides the participant list from outsiders", async () => {
+      const g = await createGroup(alice, "非公開一覧");
+      created.push(g.id);
+      const stranger = new Client();
+      expect((await stranger.get(`/api/groups/${g.id}/participants`)).status).toBe(403);
+    });
+
+    describe("rotating the invite token", () => {
+      it("invalidates the old link", async () => {
+        const g = await createGroup(alice, "リンク再発行");
+        created.push(g.id);
+
+        await alice.post(`/api/groups/${g.id}/participants`);
+
+        const stranger = new Client();
+        const res = await stranger.post(`/api/groups/${g.id}/join`, {
+          token: g.inviteToken,
+        });
+        expect(res.status).toBe(403);
+      });
+
+      it("issues a link that works", async () => {
+        const g = await createGroup(alice, "新リンク");
+        created.push(g.id);
+
+        const rotated = await alice.post(`/api/groups/${g.id}/participants`);
+        const fresh = rotated.data.inviteToken;
+        expect(fresh).not.toBe(g.inviteToken);
+
+        const stranger = new Client();
+        expect(
+          (await stranger.post(`/api/groups/${g.id}/join`, { token: fresh })).status
+        ).toBe(200);
+      });
+
+      it("leaves existing participants untouched", async () => {
+        const g = await createGroup(alice, "既存維持");
+        created.push(g.id);
+        await bob.post(`/api/groups/${g.id}/join`, { token: g.inviteToken });
+
+        await alice.post(`/api/groups/${g.id}/participants`);
+
+        expect((await bob.get(`/api/groups/${g.id}`)).status).toBe(200);
+      });
+
+      it("is refused to members and outsiders", async () => {
+        const g = await createGroup(alice, "権限確認");
+        created.push(g.id);
+        await bob.post(`/api/groups/${g.id}/join`, { token: g.inviteToken });
+
+        expect((await bob.post(`/api/groups/${g.id}/participants`)).status).toBe(403);
+        const stranger = new Client();
+        expect((await stranger.post(`/api/groups/${g.id}/participants`)).status).toBe(403);
+      });
+    });
+
+    describe("removing a participant", () => {
+      it("lets the owner evict a member", async () => {
+        const g = await createGroup(alice, "追放");
+        created.push(g.id);
+        await bob.post(`/api/groups/${g.id}/join`, { token: g.inviteToken });
+
+        const list = await alice.get(`/api/groups/${g.id}/participants`);
+        const target = list.data.participants.find((p: any) => p.role === "member");
+
+        const res = await alice.delete(`/api/groups/${g.id}/participants/${target.userId}`);
+        expect(res.status).toBe(200);
+        expect((await bob.get(`/api/groups/${g.id}`)).status).toBe(403);
+      });
+
+      it("lets a member remove themselves", async () => {
+        const g = await createGroup(alice, "自主退出");
+        created.push(g.id);
+        await bob.post(`/api/groups/${g.id}/join`, { token: g.inviteToken });
+
+        const me = (await bob.get(`/api/groups/${g.id}/participants`)).data.participants.find(
+          (p: any) => p.isYou
+        );
+        expect((await bob.delete(`/api/groups/${g.id}/participants/${me.userId}`)).status).toBe(200);
+        expect((await bob.get(`/api/groups/${g.id}`)).status).toBe(403);
+      });
+
+      it("stops a member from evicting somebody else", async () => {
+        const g = await createGroup(alice, "他人は消せない");
+        created.push(g.id);
+        await bob.post(`/api/groups/${g.id}/join`, { token: g.inviteToken });
+
+        const owner = (await alice.get(`/api/groups/${g.id}/participants`)).data.participants.find(
+          (p: any) => p.role === "owner"
+        );
+        expect((await bob.delete(`/api/groups/${g.id}/participants/${owner.userId}`)).status).toBe(403);
+      });
+
+      it("never removes the owner", async () => {
+        const g = await createGroup(alice, "オーナー保護");
+        created.push(g.id);
+        const owner = (await alice.get(`/api/groups/${g.id}/participants`)).data.participants.find(
+          (p: any) => p.role === "owner"
+        );
+
+        const res = await alice.delete(`/api/groups/${g.id}/participants/${owner.userId}`);
+        expect(res.status).toBe(400);
+        expect((await alice.get(`/api/groups/${g.id}`)).status).toBe(200);
+      });
+
+      it("allows an evicted member back in only with a valid link", async () => {
+        const g = await createGroup(alice, "再参加");
+        created.push(g.id);
+        await bob.post(`/api/groups/${g.id}/join`, { token: g.inviteToken });
+        const target = (await alice.get(`/api/groups/${g.id}/participants`)).data.participants.find(
+          (p: any) => p.role === "member"
+        );
+        await alice.delete(`/api/groups/${g.id}/participants/${target.userId}`);
+
+        // Old link still valid, so they can return — which is why locking
+        // someone out means rotating the token as well.
+        expect((await bob.post(`/api/groups/${g.id}/join`, { token: g.inviteToken })).status).toBe(200);
+
+        // Evict again, then rotate: now the old link is dead.
+        await alice.delete(`/api/groups/${g.id}/participants/${target.userId}`);
+        await alice.post(`/api/groups/${g.id}/participants`);
+        expect((await bob.post(`/api/groups/${g.id}/join`, { token: g.inviteToken })).status).toBe(403);
+        expect((await bob.get(`/api/groups/${g.id}`)).status).toBe(403);
+      });
     });
   });
 
