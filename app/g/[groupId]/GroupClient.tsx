@@ -41,6 +41,8 @@ export default function GroupClient({ groupId }: { groupId: string }) {
   useEffect(() => {
     const token = new URLSearchParams(window.location.search).get("join");
     if (!token) {
+      // The token lives in window.location, which only exists after mount.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setJoinState("ready");
       return;
     }

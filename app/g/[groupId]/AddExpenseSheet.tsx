@@ -70,6 +70,9 @@ export default function AddExpenseSheet({
   // when participants/total change in custom mode (auto-fill missing entries).
   useEffect(() => {
     if (mode !== "custom") return;
+    // Deliberate: reconciles one piece of state with others. Moving this into
+    // the event handlers would mean rewriting the split logic.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCustomAmounts((prev) => {
       const next = new Map(prev);
       const ids = Array.from(participantIds);
