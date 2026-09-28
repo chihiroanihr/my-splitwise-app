@@ -6,7 +6,7 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint",
     "test": "npm run test:unit && npm run test:api && npm run test:e2e",
     "test:unit": "vitest run tests/unit",
     "test:api": "node scripts/with-server.mjs npx vitest run tests/api",
@@ -16,7 +16,7 @@
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4",
     "nanoid": "^5.0.9",
-    "next": "^16.2.4",
+    "next": "^16.3.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "swr": "^2.3.0"
@@ -28,6 +28,8 @@
     "@types/react-dom": "^19.0.3",
     "autoprefixer": "^10.4.20",
     "dotenv": "^17.4.2",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.6",
     "postcss": "^8.5.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
