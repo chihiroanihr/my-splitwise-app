@@ -66,6 +66,48 @@ test.describe("group lifecycle", () => {
   });
 });
 
+test.describe("custom split", () => {
+  test("keeps per-person amounts in step with who is selected", async ({ page }) => {
+    await createGroup(page, `個別${Date.now()}`);
+    await addMember(page, "あゆみ");
+    await addMember(page, "けんた");
+    await addMember(page, "さくら");
+
+    await page.getByRole("button", { name: "支払いを追加" }).click();
+    const sheet = page.locator("form").filter({
+      has: page.getByRole("button", { name: "保存する" }),
+    });
+    const share = (name: string) =>
+      sheet.getByRole("listitem").filter({ hasText: name }).getByRole("textbox");
+
+    await sheet.getByPlaceholder("例: 居酒屋、ホテル代").fill("夕食");
+    await sheet.getByPlaceholder("0").first().fill("9000");
+    await sheet.getByRole("button", { name: "個別指定" }).click();
+
+    // Entering custom mode seeds everyone with an equal share.
+    for (const name of ["あゆみ", "けんた", "さくら"]) {
+      await expect(share(name)).toHaveValue("3000");
+    }
+
+    // Deselecting drops that person's row and their amount from the sum.
+    await sheet.getByRole("button", { name: "さくら", exact: true }).click();
+    await expect(share("さくら")).toHaveCount(0);
+    await expect(sheet.getByText("¥6,000 / ¥9,000")).toBeVisible();
+
+    // What was typed for people still selected survives a re-selection;
+    // the returning person is seeded fresh.
+    await share("あゆみ").fill("5000");
+    await sheet.getByRole("button", { name: "さくら", exact: true }).click();
+    await expect(share("あゆみ")).toHaveValue("5000");
+    await expect(share("さくら")).toHaveValue("3000");
+
+    await share("けんた").fill("1000");
+    await expect(sheet.getByText("¥9,000 / ¥9,000")).toBeVisible();
+    await sheet.getByRole("button", { name: "保存する" }).click();
+    await expect(page.getByText("夕食")).toBeVisible();
+  });
+});
+
 test.describe("destructive actions always confirm", () => {
   test("member delete opens a dialog instead of doing nothing", async ({ page }) => {
     await createGroup(page, `削除${Date.now()}`);
