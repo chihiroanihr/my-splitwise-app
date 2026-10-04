@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Member } from "@/lib/types";
 import { yen } from "@/lib/format";
-import { splitEqually } from "@/lib/split";
+import { reconcileCustomAmounts, splitEqually } from "@/lib/split";
 
 type Mode = "equal" | "custom";
 
@@ -66,41 +66,35 @@ export default function AddExpenseSheet({
   const totalNum = Number(amount.replace(/[,，]/g, ""));
   const totalValid = Number.isFinite(totalNum) && totalNum > 0;
 
-  // Sync customAmounts with participants & total when entering custom mode or
-  // when participants/total change in custom mode (auto-fill missing entries).
-  useEffect(() => {
-    if (mode !== "custom") return;
-    // Deliberate: reconciles one piece of state with others. Moving this into
-    // the event handlers would mean rewriting the split logic.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCustomAmounts((prev) => {
-      const next = new Map(prev);
-      const ids = Array.from(participantIds);
-      const equalShare =
-        totalValid && ids.length > 0 ? Math.round(totalNum / ids.length) : 0;
-      // Add missing
-      for (const id of ids) {
-        if (!next.has(id)) next.set(id, String(equalShare));
-      }
-      // Remove ones no longer in participants
-      for (const key of Array.from(next.keys())) {
-        if (!participantIds.has(key)) next.delete(key);
-      }
-      return next;
-    });
-  }, [mode, participantIds, totalNum, totalValid]);
+  // In custom mode the per-person amounts must track who is participating.
+  // Reconcile at the two places that can change that — picking participants
+  // and switching into custom mode — rather than in an effect after render.
+  function updateParticipants(next: Set<string>) {
+    setParticipantIds(next);
+    if (mode === "custom") {
+      setCustomAmounts((prev) => reconcileCustomAmounts(prev, next, totalValid ? totalNum : null));
+    }
+  }
+  function chooseMode(next: Mode) {
+    setMode(next);
+    if (next === "custom") {
+      setCustomAmounts((prev) =>
+        reconcileCustomAmounts(prev, participantIds, totalValid ? totalNum : null)
+      );
+    }
+  }
 
   function toggleParticipant(id: string) {
     const next = new Set(participantIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    setParticipantIds(next);
+    updateParticipants(next);
   }
   function selectAll() {
-    setParticipantIds(new Set(members.map((m) => m.id)));
+    updateParticipants(new Set(members.map((m) => m.id)));
   }
   function clearAll() {
-    setParticipantIds(new Set());
+    updateParticipants(new Set());
   }
 
   function distributeEqually() {
@@ -327,7 +321,7 @@ export default function AddExpenseSheet({
           <div className="flex gap-1 rounded-full bg-slate-100 p-1">
             <button
               type="button"
-              onClick={() => setMode("equal")}
+              onClick={() => chooseMode("equal")}
               className={`flex-1 rounded-full px-3 py-1.5 text-sm font-semibold transition ${
                 mode === "equal" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
               }`}
@@ -336,7 +330,7 @@ export default function AddExpenseSheet({
             </button>
             <button
               type="button"
-              onClick={() => setMode("custom")}
+              onClick={() => chooseMode("custom")}
               className={`flex-1 rounded-full px-3 py-1.5 text-sm font-semibold transition ${
                 mode === "custom" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
               }`}

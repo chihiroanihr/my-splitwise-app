@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { splitEqually } from "@/lib/split";
+import { reconcileCustomAmounts, splitEqually } from "@/lib/split";
 
 describe("splitEqually", () => {
   it("divides evenly when it divides evenly", () => {
@@ -51,5 +51,33 @@ describe("splitEqually", () => {
 
   it("returns nothing when there is nobody to split between", () => {
     expect(splitEqually(1000, 0)).toEqual([]);
+  });
+});
+
+describe("reconcileCustomAmounts", () => {
+  const amounts = (entries: [string, string][]) => new Map(entries);
+
+  it("keeps amounts already typed for people still selected", () => {
+    const next = reconcileCustomAmounts(amounts([["a", "700"], ["b", "300"]]), new Set(["a", "b"]), 1000);
+    expect(Object.fromEntries(next)).toEqual({ a: "700", b: "300" });
+  });
+
+  it("seeds newcomers with a rounded equal share of the total", () => {
+    const next = reconcileCustomAmounts(amounts([["a", "700"]]), new Set(["a", "b", "c"]), 1000);
+    expect(Object.fromEntries(next)).toEqual({ a: "700", b: "333", c: "333" });
+  });
+
+  it("seeds with 0 while the total isn't valid yet", () => {
+    const next = reconcileCustomAmounts(new Map(), new Set(["a", "b"]), null);
+    expect(Object.fromEntries(next)).toEqual({ a: "0", b: "0" });
+  });
+
+  it("drops people who are no longer selected", () => {
+    const next = reconcileCustomAmounts(amounts([["a", "500"], ["b", "500"]]), new Set(["a"]), 1000);
+    expect(Object.fromEntries(next)).toEqual({ a: "500" });
+  });
+
+  it("returns an empty map when nobody is selected", () => {
+    expect(reconcileCustomAmounts(amounts([["a", "1"]]), new Set(), 1000).size).toBe(0);
   });
 });
